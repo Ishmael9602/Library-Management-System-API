@@ -2,11 +2,14 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.core.validators import RegexValidator
 from django.utils import timezone
+import uuid
+
 
 class Book(models.Model):
     """
     Model representing a book in the library
     """
+    book_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     title = models.CharField(max_length=200, help_text="Book title")
     author = models.CharField(max_length=100, help_text="Book author")
     isbn = models.CharField(
@@ -22,7 +25,23 @@ class Book(models.Model):
     )
     publisher = models.CharField(max_length=100, blank=True, help_text="Publisher name")
     published_date = models.DateField(help_text="Publication date")
-    genre = models.CharField(max_length=50, blank=True, help_text="Book genre")
+    genre = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Book genre",
+        choices=[
+            ('Fiction', 'Fiction'),
+            ('Non-Fiction', 'Non-Fiction'),
+            ('Mystery', 'Mystery'),
+            ('Science Fiction', 'Science Fiction'),
+            ('Fantasy', 'Fantasy'),
+            ('Romance', 'Romance'),
+            ('Thriller', 'Thriller'),
+            ('Biography', 'Biography'),
+            ('History', 'History'),
+            ('Science', 'Science'),
+        ]
+    )
     total_copies = models.PositiveIntegerField(default=1, help_text="Total number of copies")
     available_copies = models.PositiveIntegerField(default=1, help_text="Available copies")
     description = models.TextField(blank=True, help_text="Book description")
@@ -41,14 +60,9 @@ class Book(models.Model):
         return f"{self.title} by {self.author}"
 
     def clean(self):
-        """Custom validation"""
         from django.core.exceptions import ValidationError
-        
         if self.available_copies > self.total_copies:
-            raise ValidationError(
-                'Available copies cannot be greater than total copies.'
-            )
-        
+            raise ValidationError('Available copies cannot exceed total copies.')
         if self.total_copies < 1:
             raise ValidationError('Total copies must be at least 1.')
 
@@ -58,13 +72,12 @@ class Book(models.Model):
 
     @property
     def is_available(self):
-        """Check if book is available for checkout"""
         return self.available_copies > 0
 
     @property
     def checkout_count(self):
-        """Number of times this book has been checked out"""
         return self.checkouts.count()
+
 
 class UserProfile(models.Model):
     """
@@ -95,18 +108,18 @@ class UserProfile(models.Model):
 
     @property
     def current_checkouts(self):
-        """Get current active checkouts for this user"""
         return Checkout.objects.filter(user=self.user, return_date__isnull=True)
 
     @property
     def total_checkouts(self):
-        """Total number of books ever checked out by this user"""
         return Checkout.objects.filter(user=self.user).count()
+
 
 class Checkout(models.Model):
     """
     Model representing a book checkout transaction
     """
+    checkout_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='checkouts')
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='checkouts')
     checkout_date = models.DateTimeField(auto_now_add=True)
@@ -130,52 +143,34 @@ class Checkout(models.Model):
         return f"{self.user.username} - {self.book.title} ({status})"
 
     def clean(self):
-        """Custom validation"""
         from django.core.exceptions import ValidationError
-        
-        # Check if user already has this book checked out
         if not self.is_returned:
-            existing_checkout = Checkout.objects.filter(
-                user=self.user,
-                book=self.book,
-                is_returned=False
-            ).exclude(pk=self.pk)
-            
-            if existing_checkout.exists():
-                raise ValidationError(
-                    'User already has this book checked out.'
-                )
-
-        # Validate return date
+            existing = Checkout.objects.filter(user=self.user, book=self.book, is_returned=False).exclude(pk=self.pk)
+            if existing.exists():
+                raise ValidationError('User already has this book checked out.')
         if self.return_date and self.return_date < self.checkout_date:
-            raise ValidationError(
-                'Return date cannot be before checkout date.'
-            )
+            raise ValidationError('Return date cannot be before checkout date.')
 
     def save(self, *args, **kwargs):
-        # Set due date if not provided (default 14 days)
         if not self.due_date:
             from datetime import timedelta
             self.due_date = timezone.now() + timedelta(days=14)
-        
-        # Calculate late fee if returning after due date
+
         if self.return_date and self.return_date > self.due_date and not self.is_returned:
             days_late = (self.return_date - self.due_date).days
-            self.late_fee = max(0, days_late * 1.00)  # $1.00 per day late
-        
+            self.late_fee = max(0, days_late * 1.00)
+
         self.full_clean()
         super().save(*args, **kwargs)
 
     @property
     def is_overdue(self):
-        """Check if this checkout is overdue"""
         if self.is_returned:
             return False
         return timezone.now() > self.due_date
 
     @property
     def days_overdue(self):
-        """Number of days this checkout is overdue"""
         if not self.is_overdue:
             return 0
         return (timezone.now() - self.due_date).days
