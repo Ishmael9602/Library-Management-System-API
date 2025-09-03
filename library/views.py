@@ -279,3 +279,4 @@ def index(request):
         'status': 'ok',
         'timestamp': timezone.now().isoformat()
     })
+from django_filters.rest_framework import DjangoFilterBackend

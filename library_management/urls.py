@@ -1,5 +1,8 @@
 from django.contrib import admin
 from django.urls import path, include
+from library.urls_docs import urlpatterns as docs_urls
+
+from library.urls_auth import urlpatterns as auth_urls
 from rest_framework.authtoken.views import obtain_auth_token
 from library import views  # <-- import your index view
 
