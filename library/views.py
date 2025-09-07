@@ -1,27 +1,36 @@
 # library/views.py
 
-from django.db.models import Sum, Count, Q
+from django.db.models import Sum, Count
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.models import User
-from rest_framework import filters
-from rest_framework import viewsets, status, permissions
+from datetime import timedelta
+
+from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
+from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import Book, UserProfile, Checkout
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, UserProfileSerializer,
-    BookSerializer, BookListSerializer, BookSearchSerializer,
-    CheckoutSerializer, CheckoutCreateSerializer, CheckoutReturnSerializer,
-    MyCheckoutsSerializer, LibraryStatsSerializer
+    BookSerializer, BookListSerializer, CheckoutSerializer,
+    MyCheckoutsSerializer
 )
 
-# AUTHENTICATION VIEWS
 
+# PAGINATION
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+# AUTH VIEWS
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -43,7 +52,6 @@ def register_user(request):
         }, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login_user(request):
@@ -64,22 +72,16 @@ def login_user(request):
         }, status=status.HTTP_200_OK)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def logout_user(request):
-    try:
-        token = Token.objects.get(user=request.user)
-        token.delete()
-        return Response({'message': 'Logout successful'}, status=status.HTTP_200_OK)
-    except Token.DoesNotExist:
-        return Response({'error': 'Token not found'}, status=status.HTTP_400_BAD_REQUEST)
-
+    Token.objects.filter(user=request.user).delete()
+    return Response({'message': 'Logout successful'}, status=status.HTTP_200_OK)
 
 @api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated])
 def user_profile(request):
-    profile = request.user.profile
+    profile = get_object_or_404(UserProfile, user=request.user)
     if request.method == 'GET':
         serializer = UserProfileSerializer(profile)
         return Response(serializer.data)
@@ -90,54 +92,136 @@ def user_profile(request):
             return Response({'message': 'Profile updated successfully', 'profile': serializer.data})
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-# BOOK VIEWSET
+
+# BOOKS VIEWSET
+
 class BookViewSet(viewsets.ModelViewSet):
     queryset = Book.objects.all().order_by('title')
     serializer_class = BookSerializer
     lookup_field = 'book_id'
+    pagination_class = StandardResultsSetPagination
+
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['author', 'genre']
+    search_fields = ['title', 'author', 'isbn']
+    ordering_fields = ['title', 'author', 'published_date']
+    ordering = ['title']
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'search']:
-            permission_classes = [AllowAny]
-        else:
-            permission_classes = [IsAuthenticated]
-        return [permission() for permission in permission_classes]
+        if self.action in ['list', 'retrieve', 'search', 'available']:
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get_serializer_class(self):
-        if self.action in ['list', 'search']:
+        if self.action in ['list', 'search', 'available']:
             return BookListSerializer
         return BookSerializer
 
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    def available(self, request):
+        available_books = Book.objects.filter(available_copies__gt=0).order_by('title')
+        page = self.paginate_queryset(available_books)
+        if page is not None:
+            serializer = BookListSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = BookListSerializer(available_books, many=True)
+        return Response({'count': available_books.count(), 'results': serializer.data})
+
     @action(detail=False, methods=['get'], url_path='search', permission_classes=[AllowAny])
     def search(self, request):
-        """
-        Example request:
-        /books/search/?search=Harry%20Potter&author=Rowling&genre=Fantasy&available_only=true
-        """
-        search_term = request.query_params.get('search', None)
-        author = request.query_params.get('author', None)
-        genre = request.query_params.get('genre', None)
-        available_only = request.query_params.get('available_only', None)
-
-        queryset = Book.objects.all()
-
-        if search_term:
-            queryset = queryset.filter(
-                Q(title__icontains=search_term) |
-                Q(author__icontains=search_term) |
-                Q(isbn__icontains=search_term)
-            )
-        if author:
-            queryset = queryset.filter(author__icontains=author)
-        if genre:
-            queryset = queryset.filter(genre__icontains=genre)
+        queryset = self.filter_queryset(self.get_queryset())
+        available_only = request.query_params.get('available_only')
         if available_only and available_only.lower() == 'true':
             queryset = queryset.filter(available_copies__gt=0)
-
-        serializer = BookListSerializer(queryset.order_by('title'), many=True)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = BookListSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = BookListSerializer(queryset, many=True)
         return Response({'count': queryset.count(), 'results': serializer.data})
-    
-# CHECKOUT VIEWS
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def checkout(self, request, book_id=None):
+        book = get_object_or_404(Book, book_id=book_id)
+        user = request.user
+
+        if book.available_copies < 1:
+            return Response({'error': 'No copies available'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if Checkout.objects.filter(user=user, book=book, is_returned=False).exists():
+            return Response({'error': 'Already checked out'}, status=status.HTTP_400_BAD_REQUEST)
+
+        checkout = Checkout.objects.create(
+            user=user,
+            book=book,
+            due_date=timezone.now() + timedelta(days=14)
+        )
+        book.available_copies -= 1
+        book.save()
+
+        serializer = CheckoutSerializer(checkout)
+        return Response({'message': 'Book checked out', 'checkout': serializer.data}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def return_book(self, request, book_id=None):
+        book = get_object_or_404(Book, book_id=book_id)
+        user = request.user
+
+        checkout = Checkout.objects.filter(user=user, book=book, is_returned=False).first()
+        if not checkout:
+            return Response({'error': 'You did not checkout this book'}, status=status.HTTP_400_BAD_REQUEST)
+
+        checkout.is_returned = True
+        checkout.return_date = timezone.now()
+        checkout.save()
+
+        book.available_copies += 1
+        book.save()
+
+        serializer = CheckoutSerializer(checkout)
+        return Response({'message': 'Book returned', 'checkout': serializer.data}, status=status.HTTP_200_OK)
+
+
+# CHECKOUTS VIEWSET
+
+
+class CheckoutViewSet(viewsets.ModelViewSet):
+    queryset = Checkout.objects.all().order_by('-checkout_date')
+    serializer_class = CheckoutSerializer
+    lookup_field = 'checkout_id'
+    pagination_class = StandardResultsSetPagination
+
+    def get_permissions(self):
+        return [IsAuthenticated()]
+
+    @action(detail=False, methods=['get'])
+    def my(self, request):
+        checkouts = Checkout.objects.filter(user=request.user, is_returned=False).order_by('-checkout_date')
+        serializer = MyCheckoutsSerializer(checkouts, many=True)
+        return Response({'count': checkouts.count(), 'results': serializer.data})
+
+    @action(detail=False, methods=['get'])
+    def history(self, request):
+        checkouts = Checkout.objects.filter(user=request.user).order_by('-checkout_date')
+        page = self.paginate_queryset(checkouts)
+        if page is not None:
+            serializer = CheckoutSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = CheckoutSerializer(checkouts, many=True)
+        return Response({'count': checkouts.count(), 'results': serializer.data})
+
+    @action(detail=False, methods=['get'])
+    def overdue(self, request):
+        overdue_checkouts = Checkout.objects.filter(is_returned=False, due_date__lt=timezone.now()).order_by('due_date')
+        page = self.paginate_queryset(overdue_checkouts)
+        if page is not None:
+            serializer = CheckoutSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = CheckoutSerializer(overdue_checkouts, many=True)
+        return Response({'count': overdue_checkouts.count(), 'results': serializer.data})
+
+
+# FUNCTION-BASED VIEWS FOR URLS.PY
 
 
 @api_view(['GET'])
@@ -147,62 +231,24 @@ def my_checkouts(request):
     serializer = MyCheckoutsSerializer(checkouts, many=True)
     return Response({'count': checkouts.count(), 'results': serializer.data})
 
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def checkout_history(request):
     checkouts = Checkout.objects.filter(user=request.user).order_by('-checkout_date')
-    page_size = int(request.query_params.get('page_size', 10))
-    page = int(request.query_params.get('page', 1))
-    start = (page - 1) * page_size
-    end = start + page_size
-    serializer = CheckoutSerializer(checkouts[start:end], many=True)
-    return Response({
-        'count': checkouts.count(),
-        'results': serializer.data,
-        'page': page,
-        'page_size': page_size,
-        'total_pages': (checkouts.count() + page_size - 1) // page_size
-    })
+    page = StandardResultsSetPagination().paginate_queryset(checkouts, request)
+    serializer = CheckoutSerializer(page, many=True)
+    return StandardResultsSetPagination().get_paginated_response(serializer.data)
 
 
-class CheckoutViewSet(viewsets.ModelViewSet):
-    queryset = Checkout.objects.all().order_by('-checkout_date')
-    serializer_class = CheckoutSerializer
-    permission_classes = [IsAuthenticated]
-    lookup_field = 'checkout_id'
+# STATS
 
-    def get_permissions(self):
-        if self.request.user.is_staff:
-            return [IsAuthenticated()]
-        return [permissions.DjangoModelPermissions()]
-
-    @action(detail=False, methods=['get'])
-    def overdue(self, request):
-        overdue_checkouts = Checkout.objects.filter(is_returned=False, due_date__lt=timezone.now()).order_by('due_date')
-        serializer = CheckoutSerializer(overdue_checkouts, many=True)
-        return Response({'count': overdue_checkouts.count(), 'results': serializer.data})
-
-
-# STATISTICS VIEW
-
-from django.utils import timezone
-from django.db.models import Count, Sum
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
-from .models import Book, Checkout, UserProfile
-from django.contrib.auth.models import User
-from .serializers import LibraryStatsSerializer
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def library_stats(request):
     if not request.user.is_staff:
-        return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
 
-    # Basic counts
     total_books = Book.objects.count()
     total_copies = Book.objects.aggregate(total=Sum('total_copies'))['total'] or 0
     available_copies = Book.objects.aggregate(total=Sum('available_copies'))['total'] or 0
@@ -213,19 +259,12 @@ def library_stats(request):
     current_checkouts = Checkout.objects.filter(is_returned=False).count()
     overdue_checkouts = Checkout.objects.filter(is_returned=False, due_date__lt=timezone.now()).count()
 
-    # Popular books (most checked out)
-    # Use 'checkouts' as Count() to match your model field
     popular_books = Book.objects.annotate(total_checkouts=Count('checkouts')).order_by('-total_checkouts')[:5]
     popular_books_data = [
-        {
-            'title': book.title,
-            'author': book.author,
-            'checkout_count': book.total_checkouts # Map annotated field to output
-        }
+        {'title': book.title, 'author': book.author, 'checkout_count': book.total_checkouts}
         for book in popular_books
     ]
 
-    # Recent checkouts
     recent_checkouts = Checkout.objects.select_related('user', 'book').order_by('-checkout_date')[:10]
     recent_checkouts_data = [
         {
@@ -237,8 +276,7 @@ def library_stats(request):
         for checkout in recent_checkouts
     ]
 
-    # Combine stats
-    stats_data = {
+    return Response({
         'total_books': total_books,
         'total_copies': total_copies,
         'available_copies': available_copies,
@@ -250,15 +288,11 @@ def library_stats(request):
         'overdue_checkouts': overdue_checkouts,
         'popular_books': popular_books_data,
         'recent_checkouts': recent_checkouts_data
-    }
-
-    serializer = LibraryStatsSerializer(data=stats_data)
-    if serializer.is_valid():
-        return Response(serializer.data)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    })
 
 
-# UTILITY VIEWS
+# UTILITY
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -270,7 +304,6 @@ def health_check(request):
         'version': '1.0.0'
     })
 
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def index(request):
@@ -279,4 +312,3 @@ def index(request):
         'status': 'ok',
         'timestamp': timezone.now().isoformat()
     })
-from django_filters.rest_framework import DjangoFilterBackend

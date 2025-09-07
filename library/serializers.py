@@ -3,8 +3,7 @@ from django.contrib.auth.models import User
 from .models import Book, UserProfile, Checkout
 from django.contrib.auth import authenticate
 
-# Book Serializers
-
+# BOOK SERIALIZERS
 
 class BookSerializer(serializers.ModelSerializer):
     book_id = serializers.UUIDField(read_only=True)
@@ -47,16 +46,7 @@ class BookListSerializer(serializers.ModelSerializer):
         fields = ["book_id", "title", "author", "available_copies"]
 
 
-# Book Search Serializer (for /books/search/)
-class BookSearchSerializer(serializers.Serializer):
-    search = serializers.CharField(required=False)
-    title = serializers.CharField(required=False)
-    author = serializers.CharField(required=False)
-    isbn = serializers.CharField(required=False)
-    genre = serializers.CharField(required=False)
-    available_only = serializers.BooleanField(required=False)
-
-# User Serializers
+# USER SERIALIZERS
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -84,7 +74,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         ]
 
 
-# Checkout Serializers
+# CHECKOUT SERIALIZERS
 
 class CheckoutSerializer(serializers.ModelSerializer):
     checkout_id = serializers.UUIDField(read_only=True)
@@ -110,40 +100,29 @@ class CheckoutSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["checkout_date", "late_fee", "is_overdue", "days_overdue"]
 
-    def validate(self, attrs):
-        user = attrs.get("user")
-        book = attrs.get("book")
-        is_returned = attrs.get("is_returned", False)
-        return_date = attrs.get("return_date")
-
-        if not is_returned:
-            existing = Checkout.objects.filter(user=user, book=book, is_returned=False)
-            if existing.exists():
-                raise serializers.ValidationError("User already has this book checked out.")
-
-        if return_date and return_date < attrs.get("checkout_date", None):
-            raise serializers.ValidationError("Return date cannot be before checkout date.")
-
-        return attrs
-
 
 class CheckoutCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Checkout
-        fields = ["user", "book", "due_date", "notes"]
+        fields = ["book", "due_date", "notes"]
 
+    def create(self, validated_data):
+        user = self.context['request'].user
+        book = validated_data['book']
 
-class CheckoutReturnSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Checkout
-        fields = ["return_date", "is_returned", "notes"]
+        if book.available_copies < 1:
+            raise serializers.ValidationError("No available copies for this book.")
 
-    def validate(self, attrs):
-        checkout = self.instance
-        return_date = attrs.get("return_date")
-        if return_date and checkout and return_date < checkout.checkout_date:
-            raise serializers.ValidationError("Return date cannot be before checkout date.")
-        return attrs
+        book.available_copies -= 1
+        book.save()
+
+        checkout = Checkout.objects.create(
+            user=user,
+            book=book,
+            due_date=validated_data['due_date'],
+            notes=validated_data.get('notes', '')
+        )
+        return checkout
 
 
 class MyCheckoutsSerializer(serializers.ModelSerializer):
@@ -152,7 +131,7 @@ class MyCheckoutsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Checkout
         fields = [
-            "id",
+            "checkout_id",
             "book",
             "checkout_date",
             "due_date",
@@ -161,7 +140,7 @@ class MyCheckoutsSerializer(serializers.ModelSerializer):
         ]
 
 
-# User Authentication Serializers
+# USER AUTH SERIALIZERS
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
@@ -201,9 +180,18 @@ class UserLoginSerializer(serializers.Serializer):
             raise serializers.ValidationError("Must include 'username' and 'password'.")
         return data
 
-# Library Stats Serializer
+
+# LIBRARY STATS SERIALIZER
 
 class LibraryStatsSerializer(serializers.Serializer):
     total_books = serializers.IntegerField()
-    total_checkouts = serializers.IntegerField()
+    total_copies = serializers.IntegerField()
+    available_copies = serializers.IntegerField()
+    checked_out_copies = serializers.IntegerField()
     total_users = serializers.IntegerField()
+    active_users = serializers.IntegerField()
+    total_checkouts = serializers.IntegerField()
+    current_checkouts = serializers.IntegerField()
+    overdue_checkouts = serializers.IntegerField()
+    popular_books = serializers.ListField()
+    recent_checkouts = serializers.ListField()

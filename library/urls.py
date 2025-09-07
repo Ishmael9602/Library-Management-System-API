@@ -9,17 +9,17 @@ router.register(r'books', views.BookViewSet, basename='book')
 router.register(r'checkouts', views.CheckoutViewSet, basename='checkout')
 
 urlpatterns = [
-    # Router endpoints (Books + Checkouts)
+    # API endpoints from routers
     path('', include(router.urls)),
 
-    # Authentication endpoints
+    # Authentication
     path('auth/register/', views.register_user, name='register'),
     path('auth/login/', views.login_user, name='login'),
     path('auth/logout/', views.logout_user, name='logout'),
     path('auth/token/', obtain_auth_token, name='api_token_auth'),
     path('auth/profile/', views.user_profile, name='user_profile'),
 
-    # Checkout endpoints
+    # Checkout-related endpoints
     path('checkouts/my/', views.my_checkouts, name='my_checkouts'),
     path('checkouts/history/', views.checkout_history, name='checkout_history'),
 
