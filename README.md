@@ -1,5 +1,3 @@
-
-
 # Library Management System API
 
 A comprehensive REST API for managing all library operations, including user management, book cataloging, and checkout/return workflows. This API is designed to demonstrate real-world backend development using Django REST Framework with token-based authentication and role-based permissions.
