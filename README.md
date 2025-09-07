@@ -44,7 +44,7 @@ The **Library Management System API** provides:
 2. **Token Usage**: All protected endpoints require the token in the `Authorization` header.
 
    ```
-   Authorization: Token <your_token>
+   Authorization: Token <token here>
    ```
 3. **Role-Based Access**:
 
@@ -64,8 +64,6 @@ cd Library-Management-System-API
 python -m venv venv
 # Windows
 venv\Scripts\activate
-# macOS/Linux
-source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -92,56 +90,20 @@ Below is a **full demo of the endpoints** with explanations, request bodies, and
 1. **Register User**
    **POST** `/api/auth/register/`
    **Purpose**: Create a new user account
-   **Request Body**:
-
-   ```json
-   {
-     "username": "libraryuser",
-     "email": "user@library.com",
-     "password": "securepass123",
-     "password_confirm": "securepass123",
-     "first_name": "John",
-     "last_name": "Doe"
-   }
-   ```
-
-   **Response**:
-
-   ```json
-   {
-     "message": "User registered successfully",
-     "user": {"id": 1, "username": "libraryuser", "email": "user@library.com"},
-     "token": "9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b"
-   }
-   ```
+   
+  
 
 2. **Login User**
    **POST** `/api/auth/login/`
    **Purpose**: Authenticate user and retrieve token
    **Request Body**:
 
-   ```json
-   {"username": "libraryuser", "password": "securepass123"}
-   ```
 
-   **Response**:
-
-   ```json
-   {
-     "message": "Login successful",
-     "user": {"id": 1, "username": "libraryuser", "email": "user@library.com"},
-     "token": "9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b"
-   }
-   ```
 
 3. **Logout User**
    **POST** `/api/auth/logout/`
    **Headers:** `Authorization: Token <your_token>`
-   **Response**:
 
-   ```json
-   {"message": "Logout successful"}
-   ```
 
 4. **User Profile**
    **GET / PUT** `/api/auth/profile/`
@@ -155,40 +117,17 @@ Below is a **full demo of the endpoints** with explanations, request bodies, and
 1. **View Available Books**
    **GET** `/api/books/available/`
    **Purpose**: List all books with copies available
-   **Response**:
-
-   ```json
-   {
-     "count": 1,
-     "results": [{"book_id": "...", "title": "The Great Gatsby", "author": "F. Scott Fitzgerald"}]
-   }
-   ```
 
 2. **Checkout Book**
    **POST** `/api/books/<book_id>/checkout/`
    **Headers:** `Authorization: Token <your_token>`
    **Purpose**: Borrow a book
-   **Request Body (optional)**:
-
-   ```json
-   {"notes": "Looking forward to reading this classic!"}
-   ```
-
-   **Response**:
-
-   ```json
-   {"message": "Book checked out", "checkout": {"checkout_id": "...", "book_title": "The Great Gatsby"}}
-   ```
-
+  
 3. **Return Book**
    **POST** `/api/books/<book_id>/return_book/`
    **Headers:** `Authorization: Token <your_token>`
    **Purpose**: Return a borrowed book
-   **Response**:
-
-   ```json
-   {"message": "Book returned", "checkout": {"checkout_id": "...", "is_returned": true}}
-   ```
+   
 
 4. **Search Books**
    **GET** `/api/books/search/?search=<title_or_author>`
